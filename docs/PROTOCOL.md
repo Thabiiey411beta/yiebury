@@ -48,7 +48,9 @@ Three ways USDY appears on Solana, and which one this program uses:
 
 Pyth publishes `Crypto.USDY/USD` as feed `e393449f6aff8a4b6d3e1165a7c9ebec103685f3b41e60db4277b5b6d10e7326`. That id is from Pyth’s public feed list, not from Ondo’s address book. It is not the redemption slope. A signed Hermes update returned unauthorized on 2026-10-01, so no tick from that feed is stored here. Switchboard was named in a 2024 Ondo post. No feed hash is in the current address book. None is invented.
 
-Harvest therefore prices from a Jupiter USDY/USDC snapshot, which is the pool the yield is actually sold into (USDC `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`). If that snapshot is paused, stale, or the pool cannot fill inside the slippage cap, harvest returns success and moves nothing. A later crank may attach a signed Pyth update as a second check. If that update is missing or paused, harvest still skips. It must not fall back to the Ethereum oracle.
+Harvest therefore prices from a Jupiter USDY/USDC snapshot, which is the pool the yield is actually sold into (USDC `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`). The desk asks `https://lite-api.jup.ag/swap/v1/quote` for a sale of 1 USDY. If that quote is rate-limited, it reads Jupiter’s listed USD price for the same mint (`https://api.jup.ag/price/v3`) and says that this is not a pool fill. If both fail, the snapshot is paused and harvest skips. A later crank may attach a signed Pyth update as a second check. If that update is missing or paused, harvest still skips. It must not fall back to the Ethereum oracle.
+
+The connect button calls Wallet Standard `standard:connect`, or `provider.connect()` on an injected Phantom, Solflare, or Backpack. It does not invent an address. After a wallet answers, the desk reads that address’s SOL, USDC, and USDY from Solana mainnet. A deposit cannot exceed the matching balance. The vault program is not deployed, so the desk does not ask the wallet to sign a swap and does not call Ondo’s mint or the OFT adapter.
 
 ## Price
 

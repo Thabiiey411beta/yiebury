@@ -357,7 +357,7 @@ export function setPrice(prev: Engine, priceMicro: bigint): Step {
   if (priceMicro <= 0n) return fail(prev, "Price has to be positive.");
   const e = clone(prev);
   e.priceMicro = priceMicro;
-  return { ok: true, engine: e, message: "Mocked price updated. This is a Jupiter-style snapshot, not an Ondo oracle." };
+  return { ok: true, engine: e, message: "Price snapshot updated. This is the pool price, not an Ondo oracle." };
 }
 
 export function setPaused(prev: Engine, paused: boolean): Engine {

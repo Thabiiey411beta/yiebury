@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   advanceClock,
   advanceYear,
@@ -13,12 +13,16 @@ import {
   replayTenThousand,
   setPaused,
   setPoolSlippage,
+  setPrice,
   setWrapFails,
   withdraw,
   type Engine,
   type LedgerEvent,
 } from "@/lib/yiebury/engine";
 import { formatAtoms, formatPrice, formatUsd, parseAtoms } from "@/lib/yiebury/format";
+import { fetchUsdySnapshot, fetchWalletBalances, type UsdySnapshot } from "@/lib/yiebury/market";
+import type { WalletSession } from "@/lib/yiebury/wallet";
+import { WalletButton } from "@/components/wallet-button";
 import {
   BPS,
   DEFAULT_BUILDER_FEE_BPS,
@@ -45,25 +49,57 @@ export function Desk() {
   const [engine, setEngine] = useState<Engine>(() => createEngine());
   const [path, setPath] = useState<"abroad" | "us">("abroad");
   const [amount, setAmount] = useState("10000");
-  const [note, setNote] = useState("Devnet simulator. Nothing here is a mainnet transaction.");
+  const [note, setNote] = useState("Connect a wallet to read mainnet balances. The vault ledger does not move funds.");
   const [slippage, setSlippage] = useState("0");
+  const [session, setSession] = useState<WalletSession | null>(null);
+  const [balances, setBalances] = useState<{ sol: bigint; usdc: bigint; usdy: bigint } | null>(null);
+  const [balanceNote, setBalanceNote] = useState<string | null>(null);
+  const [live, setLive] = useState<UsdySnapshot | null>(null);
+  const [quoteBusy, setQuoteBusy] = useState(false);
+  const priceTouched = useRef(false);
   const pos = position(engine);
   const locked = engine.vault !== null;
   const usPerson = locked ? engine.vault!.usPerson : path === "us";
   const illustration = useMemo(() => buildIllustration(engine.orePrice), [engine.orePrice]);
 
   function apply(step: { ok: boolean; engine: Engine; message: string }) {
+    priceTouched.current = true;
     setEngine(step.engine);
     setNote(step.message);
   }
 
   function onDeposit() {
+    priceTouched.current = true;
     const atoms = parseAtoms(amount, 6);
     if (atoms === null || atoms <= 0n) {
       setNote("Enter a USD amount, up to 6 decimals.");
       return;
     }
-    apply(usPerson ? depositUsdy(engine, true, atoms) : depositUsdc(engine, false, atoms));
+    if (!session) {
+      setNote("Connect a Solana wallet first. That button calls the wallet. Nothing is deposited until it answers.");
+      return;
+    }
+    if (!balances) {
+      setNote(balanceNote ?? "Still reading this wallet on mainnet.");
+      return;
+    }
+    const held = usPerson ? balances.usdy : balances.usdc;
+    const label = usPerson ? "USDY" : "USDC";
+    if (atoms > held) {
+      setNote(`This wallet holds ${formatAtoms(held, 6)} ${label}. The deposit stops there. No transaction was sent.`);
+      return;
+    }
+    const funded =
+      !usPerson && engine.depositor.usdc < atoms
+        ? { ...engine, depositor: { ...engine.depositor, usdc: atoms } }
+        : engine;
+    const step = usPerson ? depositUsdy(funded, true, atoms) : depositUsdc(funded, false, atoms);
+    if (!step.ok) {
+      apply(step);
+      return;
+    }
+    setEngine(step.engine);
+    setNote(`${step.message} Recorded on this desk only. The wallet was not asked to sign, and Ondo’s mint was not called.`);
   }
 
   function onReplay() {
@@ -75,19 +111,81 @@ export function Desk() {
 
   const buryBps = BPS - engine.builderFeeBps;
 
+  useEffect(() => {
+    let cancel = false;
+    fetchUsdySnapshot().then((snap) => {
+      if (cancel) return;
+      setLive(snap);
+      if (!snap.ok) {
+        if (!priceTouched.current) setNote(snap.reason);
+        return;
+      }
+      const price = BigInt(snap.priceMicro);
+      setEngine((prev) => {
+        if (priceTouched.current || prev.vault || prev.priceMicro !== 1_000_000n) return prev;
+        return setPaused(setPrice(prev, price).engine, false);
+      });
+      if (!priceTouched.current) setNote(snapshotNote(snap));
+    });
+    return () => {
+      cancel = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!session) {
+      setBalances(null);
+      setBalanceNote(null);
+      return;
+    }
+    let cancel = false;
+    setBalances(null);
+    setBalanceNote("Reading this wallet on mainnet.");
+    fetchWalletBalances({ data: { owner: session.address } }).then((result) => {
+      if (cancel) return;
+      if (!result.ok) {
+        setBalances(null);
+        setBalanceNote(result.reason);
+        return;
+      }
+      setBalances({ sol: BigInt(result.sol), usdc: BigInt(result.usdc), usdy: BigInt(result.usdy) });
+      setBalanceNote(null);
+    });
+    return () => {
+      cancel = true;
+    };
+  }, [session]);
+
+  async function refreshSnapshot() {
+    priceTouched.current = true;
+    setQuoteBusy(true);
+    try {
+      const snap = await fetchUsdySnapshot();
+      setLive(snap);
+      if (!snap.ok) {
+        setEngine((prev) => setPaused(prev, true));
+        setNote(snap.reason);
+        return;
+      }
+      const price = BigInt(snap.priceMicro);
+      setEngine((prev) => setPaused(setPrice(prev, price).engine, false));
+      setNote(snapshotNote(snap));
+    } finally {
+      setQuoteBusy(false);
+    }
+  }
+
   return (
     <main className="mx-auto min-h-screen w-full max-w-xl px-5 py-8 sm:py-12">
-      <header className="flex items-start justify-between gap-4">
-        <div>
+      <header className="flex flex-wrap items-end justify-between gap-x-4 gap-y-3">
+        <div className="min-w-0">
           <p className="flex items-center gap-2 text-xs font-medium tracking-wide text-muted uppercase">
             <span className="inline-block size-2.5 bg-copper" aria-hidden="true" />
             Not an ore.com product
           </p>
           <h1 className="mt-2 font-serif text-5xl leading-none text-ink">YieBury</h1>
         </div>
-        <p className="max-w-36 pt-1 text-right text-xs leading-snug text-muted">
-          Devnet desk. Mocked pool, mocked price.
-        </p>
+        <WalletButton onSession={setSession} />
       </header>
 
       <p className="mt-6 text-base text-ink">
@@ -113,6 +211,32 @@ export function Desk() {
           </a>
         ))}
       </nav>
+
+      <section className="mt-6 border-t border-line pt-4" aria-labelledby="wallet-heading">
+        <h2 id="wallet-heading" className="font-serif text-2xl">
+          Wallet
+        </h2>
+        {session ? (
+          <>
+            <p className="mt-2 break-all font-serif text-lg">{session.address}</p>
+            <p className="text-sm text-muted">{session.name} on Solana mainnet</p>
+            {balances ? (
+              <dl className="mt-3 border-t border-ink">
+                <Row label="SOL" value={formatAtoms(balances.sol, 9, 4)} />
+                <Row label="USDC" value={formatAtoms(balances.usdc, 6)} />
+                <Row label="USDY" value={formatAtoms(balances.usdy, 6)} />
+              </dl>
+            ) : (
+              <p className="mt-2 text-sm text-muted">{balanceNote ?? "Reading this wallet on mainnet."}</p>
+            )}
+          </>
+        ) : (
+          <p className="mt-2 text-sm text-muted">
+            Connect calls the wallet on this page. It does not invent an address, and it does not approve a
+            transaction.
+          </p>
+        )}
+      </section>
 
       <section className="mt-10" aria-labelledby="deposit-heading">
         <h2 id="deposit-heading" className="font-serif text-2xl">
@@ -170,9 +294,14 @@ export function Desk() {
         </div>
         <p className="mt-2 text-sm text-muted">
           Ondo publishes no oracle for the Solana mint. The Ethereum redemption oracle is not read.
-          Pyth lists a USDY/USD feed, and it is not Ondo’s price and not the pool. Harvest uses a
-          Jupiter USDY/USDC snapshot. If that snapshot is paused, or the pool cannot fill inside
-          the slippage cap, harvest does nothing.
+          {live === null
+            ? " Waiting on a Jupiter USDY/USDC fill. If it fails, harvest skips."
+            : live.ok
+              ? live.source === "quote"
+                ? ` Jupiter’s last fill was ${formatPrice(BigInt(live.priceMicro))} USDC per USDY.`
+                : ` Jupiter lists the mint at ${formatPrice(BigInt(live.priceMicro))}. The pool quote did not answer.`
+              : ` ${live.reason}`}{" "}
+          Pyth’s USDY/USD feed is not this price.
         </p>
         <div className="mt-3 grid grid-cols-2 gap-2">
           <button type="button" className="min-h-11 border border-ink px-3 text-sm" onClick={() => apply(advanceYear(engine))}>
@@ -182,11 +311,20 @@ export function Desk() {
             type="button"
             className="min-h-11 border border-ink px-3 text-sm"
             onClick={() => {
+              priceTouched.current = true;
               setEngine(setPaused(engine, !engine.paused));
               setNote(engine.paused ? "Price source resumed." : "Price source paused. Harvest will skip.");
             }}
           >
             {engine.paused ? "Resume price" : "Pause price"}
+          </button>
+          <button
+            type="button"
+            className="col-span-2 min-h-11 border border-ink px-3 text-sm"
+            disabled={quoteBusy}
+            onClick={refreshSnapshot}
+          >
+            {quoteBusy ? "Asking Jupiter" : "Refresh Jupiter snapshot"}
           </button>
         </div>
       </section>
@@ -413,6 +551,14 @@ function PathOption({
       <span className="mt-1 block text-sm text-muted">{body}</span>
     </button>
   );
+}
+
+function snapshotNote(snap: Extract<UsdySnapshot, { ok: true }>): string {
+  const price = formatPrice(BigInt(snap.priceMicro));
+  if (snap.source === "quote") {
+    return `Jupiter snapshot: 1 USDY fills ${price} USDC. Ondo’s oracle was not read.`;
+  }
+  return `Jupiter lists the USDY mint at ${price}. The pool quote was unavailable, so this is not a fill. Ondo’s oracle was not read.`;
 }
 
 function Row({
