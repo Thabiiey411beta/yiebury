@@ -1,0 +1,10 @@
+[package]
+name = "yiebury"
+version = "0.1.0"
+edition = "2021"
+description = "YieBury vault. Treasury yield on unlocked USDY, paid as stORE, with a fee that buries ORE."
+license = "Apache-2.0"
+publish = false
+
+[lib]
+path = "src/lib.rs"
