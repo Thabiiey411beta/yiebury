@@ -25,15 +25,37 @@ Pool slippage and the Solana fee come out of each sold slice after that split. J
 
 The 3.55% figure is an illustration of Ondo’s published slope. The program does not hardcode it.
 
+## Solana integration
+
+Checked against Ondo’s address book and bridge docs on 2026-10-01. There is no Solana USDY manager and no Solana port of `USDY_InstantManager`.
+
+| What is on Solana | Address | Use |
+| --- | --- | --- |
+| Accumulating USDY mint, 6 decimals | `A1KLoBrKBde8Ty9qtNQUtq3C2ortoC3u7twggz7sEto6` | The only USDY this vault holds |
+| LayerZero OFT adapter | `7YNReenG6AXgVUfmSizt6hoVXrznS4zDdgCj1UTLJ2S3` | Ondo’s bridge. Burns on one chain and mints native USDY on the other. Not called |
+| Ondo Stocks program | `XzTT4XB8m7sLD2xi6snefSasaswsKCxx5Tifjondogm` | Tokenized stocks, not USDY. Not called |
+| USDon | `ZPFtoCe7WWqG4N3ZFRccS8T9SMBeHsd1Vmgv2i7ondo` | Stock-swap token, not USDY. Not called |
+
+The Solana address-book row for USDY is the mint and nothing else. No oracle, no instant manager, no rUSDY mint.
+
+Three ways USDY appears on Solana, and which one this program uses:
+
+1. **Secondary pool.** Buy already-unlocked USDY with USDC through Jupiter. This is `deposit_usdc`. It does not onboard anyone to Ondo and does not call a mint.
+2. **Primary subscribe.** Ondo’s own mint, on Ethereum via `USDY_InstantManager.subscribe`, or by onboarding and a USDC transfer to Ondo. New tokens stay locked about 40 to 50 days under Regulation S. This program never does that. Ondo’s basics page tells integrators to contact support to mint on Sui, Aptos, Stellar, XRP, or Noble. Solana is not given a subscribe instruction.
+3. **Bridge.** [Ondo’s bridge](https://docs.ondo.finance/tools/ondo-bridge) moves USDY between Arbitrum, BNB Chain, Ethereum, Mantle, Sei, Solana, and Tempo with LayerZero OFT. Solana paths are capped at 250,000 USDY outbound and 300,000 inbound per pathway per day. The bridge mints native USDY on arrival. This program does not call it. A bridge mint is still a mint, and the destination lock state is not documented, so it is not treated as unlocked inventory.
+
+`RWADynamicOracle.getPrice()` is the Ethereum redemption price (wrapper `0x87b126e5518b6a1Bb8465779b4607C45C643DF90`). It reverts when paused. It is not deployed for the Solana mint and is not read. Mantle has its own redemption oracle. Neither is the Solana path.
+
+Pyth publishes `Crypto.USDY/USD` as feed `e393449f6aff8a4b6d3e1165a7c9ebec103685f3b41e60db4277b5b6d10e7326`. That id is from Pyth’s public feed list, not from Ondo’s address book. It is not the redemption slope. A signed Hermes update returned unauthorized on 2026-10-01, so no tick from that feed is stored here. Switchboard was named in a 2024 Ondo post. No feed hash is in the current address book. None is invented.
+
+Harvest therefore prices from a Jupiter USDY/USDC snapshot, which is the pool the yield is actually sold into (USDC `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`). If that snapshot is paused, stale, or the pool cannot fill inside the slippage cap, harvest returns success and moves nothing. A later crank may attach a signed Pyth update as a second check. If that update is missing or paused, harvest still skips. It must not fall back to the Ethereum oracle.
+
 ## Price
 
-USDY on Solana is accumulating. Yield is a rising price, not a coupon, and not a rebase. Use the accumulating mint, not rUSDY.
+USDY on Solana is accumulating. Yield is a rising price, not a coupon, and not a rebase. Holders are not paid a coupon. They receive only the published slope, which Ondo sets a little under portfolio yield and keeps the spread. Use the accumulating mint, not rUSDY.
 
 - Mint, 6 decimals: `A1KLoBrKBde8Ty9qtNQUtq3C2ortoC3u7twggz7sEto6`
 - Checked against [Ondo’s address book](https://docs.ondo.finance/addresses). The Solana section lists the mint and no oracle account.
-- The Ethereum `RWADynamicOracle` is not on this path and is not read.
-- A 2024 Ondo post said Switchboard would publish a primary and a secondary USDY feed. No feed hash is in the current official address book. None is invented here.
-- Harvest prices from a Jupiter USDY/USDC snapshot (USDC `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`). If the snapshot is paused, stale, or the pool cannot fill inside the slippage cap, harvest returns success and moves nothing.
 
 ## Deposits
 

@@ -169,9 +169,10 @@ export function Desk() {
           <p className="font-serif text-2xl tabular-nums">{engine.paused ? "Paused" : formatPrice(engine.priceMicro)}</p>
         </div>
         <p className="mt-2 text-sm text-muted">
-          Ondo publishes no oracle for the Solana USDY mint. Ethereum’s RWADynamicOracle is not used.
-          Harvest reads a Jupiter USDY/USDC snapshot. If that snapshot is paused, or the pool cannot
-          fill inside the slippage cap, harvest does nothing.
+          Ondo publishes no oracle for the Solana mint. The Ethereum redemption oracle is not read.
+          Pyth lists a USDY/USD feed, and it is not Ondo’s price and not the pool. Harvest uses a
+          Jupiter USDY/USDC snapshot. If that snapshot is paused, or the pool cannot fill inside
+          the slippage cap, harvest does nothing.
         </p>
         <div className="mt-3 grid grid-cols-2 gap-2">
           <button type="button" className="min-h-11 border border-ink px-3 text-sm" onClick={() => apply(advanceYear(engine))}>
